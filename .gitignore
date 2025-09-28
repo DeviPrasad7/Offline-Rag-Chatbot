@@ -1,0 +1,2 @@
+﻿# Ignore all safetensors (large model files)
+models/**/*.safetensors
