@@ -22,7 +22,7 @@ It runs entirely offline, allowing you to query documents without any internet c
 C:\DocRAG\RAGChat
 │
 ├─ download_models.py     # Downloads FLAN-T5 and embeddings models
-├─ app.py                 # Streamlit chatbot interface
+├─ start.py                 # Streamlit chatbot interface
 ├─ models/                # Folder where downloaded models are saved
 │   ├─ flan-t5-base/
 │   └─ all-MiniLM-L6-v2/
@@ -72,7 +72,7 @@ This will save the models locally in `./models/`:
 Start the Streamlit app:
 
 ```powershell
-streamlit run app.py
+streamlit run start.py
 ```
 * Will run offline , you can turn of your wifi.
 * The web interface will open at `http://localhost:8501`.
