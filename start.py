@@ -11,8 +11,13 @@ from langchain_huggingface import HuggingFaceEmbeddings, HuggingFacePipeline
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 
-from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.document_loaders import (
+    PyPDFLoader,
+    UnstructuredWordDocumentLoader,
+)
+from langchain.document_loaders import TextLoader
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
+import torch
 
 os.environ["HUGGINGFACE_HUB_TOKEN"] = ""
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -68,6 +73,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+
 def clean_lab_text(text: str) -> str:
     pattern = re.compile(r"(ng/mL|mg/dL)\s+(\d+\.\d+)\s*-\s*(\d+\.\d+)\s*(\d+\.\d+)")
     def replacer(m):
@@ -78,29 +84,48 @@ def clean_lab_text(text: str) -> str:
         return f"Result: {result} {unit}, Reference Range: {ref_low} – {ref_high} {unit}"
     return pattern.sub(replacer, text)
 
+
 text_data = """
 ProRAG Chatbot provides local RAG capabilities.
-It can answer questions from uploaded PDFs using offline Hugging Face models.
+It can answer questions from uploaded PDFs, DOCX, and TXT files using offline Hugging Face models.
 """
+
 
 with st.sidebar:
     st.header("📂 Upload Documents")
-    uploaded_files = st.file_uploader("Choose PDF file(s)", type="pdf", accept_multiple_files=True)
+    uploaded_files = st.file_uploader(
+        "Choose file(s) (PDF, DOCX, TXT)", 
+        type=["pdf", "docx", "txt"], 
+        accept_multiple_files=True
+    )
 
     documents = []
     if uploaded_files:
-        st.session_state["pdf_processing"] = True
-        with st.spinner("Processing PDF(s)..."):
+        st.session_state["file_processing"] = True
+        with st.spinner("Processing file(s)..."):
             for file in uploaded_files:
                 temp_path = f"temp_{file.name}"
                 with open(temp_path, "wb") as f:
                     f.write(file.getbuffer())
-                loader = PyPDFLoader(temp_path)
-                docs = loader.load()
-                for doc in docs:
-                    doc.page_content = clean_lab_text(doc.page_content)
-                documents.extend(docs)
-        st.session_state["pdf_processing"] = False
+                try:
+                    ext = file.name.split(".")[-1].lower()
+                    if ext == "pdf":
+                        loader = PyPDFLoader(temp_path)
+                    elif ext == "docx":
+                        loader = UnstructuredWordDocumentLoader(temp_path)
+                    elif ext == "txt":
+                        loader = TextLoader(temp_path)
+                    else:
+                        st.warning(f"Unsupported file type: {file.name}")
+                        continue
+                    docs = loader.load()
+                    for doc in docs:
+                        if doc.page_content:
+                            doc.page_content = clean_lab_text(doc.page_content)
+                    documents.extend(docs)
+                except Exception as e:
+                    st.error(f"Error processing {file.name}: {e}")
+        st.session_state["file_processing"] = False
     else:
         documents = [text_data]
 
@@ -108,27 +133,24 @@ with st.sidebar:
         st.session_state.chat_history = []
         st.success("Chat history cleared!")
 
+
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-text_splitter = CharacterTextSplitter(chunk_size=80, chunk_overlap=16)
+text_splitter = CharacterTextSplitter(chunk_size=100, chunk_overlap=20)
 
-if hasattr(documents[0], "page_content"):
+if documents and hasattr(documents[0], "page_content"):
     chunks = text_splitter.split_documents(documents)
     raw_texts = [c.page_content for c in chunks]
 else:
     raw_texts = text_splitter.split_text(str(documents))
 
 embeddings = HuggingFaceEmbeddings(model_name=LOCAL_EMBEDDING_MODEL)
+
 vector_store = FAISS.from_texts(raw_texts, embeddings)
 
 tokenizer = AutoTokenizer.from_pretrained(LOCAL_LLM_MODEL, local_files_only=True)
 model = AutoModelForSeq2SeqLM.from_pretrained(LOCAL_LLM_MODEL, local_files_only=True)
-
-gen_kwargs = dict(
-    max_length=512,
-    do_sample=False,
-)
 
 from langchain_huggingface import HuggingFacePipeline
 
@@ -137,18 +159,23 @@ class TruncatingHuggingFacePipeline(HuggingFacePipeline):
         inputs = self.pipeline.tokenizer(
             prompt,
             truncation=True,
-            max_length=512,
+            max_length=256,
             return_tensors="pt",
         )
-        outputs = self.pipeline.model.generate(
-            **inputs, max_length=512
-        )
+        with torch.no_grad():
+            outputs = self.pipeline.model.generate(
+                **inputs, max_length=256
+            )
         decoded = self.pipeline.tokenizer.batch_decode(
             outputs, skip_special_tokens=True
         )
         return decoded[0]
 
-hf_pipeline = pipeline("text2text-generation", model=model, tokenizer=tokenizer, device=-1)
+hf_pipeline = pipeline(
+    "text2text-generation",
+    model=model,
+    tokenizer=tokenizer,
+)
 
 llm = TruncatingHuggingFacePipeline(pipeline=hf_pipeline)
 
@@ -173,7 +200,7 @@ simple_responses = {
     "goodbye": "Goodbye! Feel free to return anytime! 😊"
 }
 
-input_disabled = st.session_state.get("pdf_processing", False) or st.session_state.get("bot_processing", False)
+input_disabled = st.session_state.get("file_processing", False) or st.session_state.get("bot_processing", False)
 user_input = st.chat_input("💬 Type your message...", disabled=input_disabled)
 
 def safe_question(q: str) -> str:
