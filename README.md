@@ -47,7 +47,7 @@ python -m venv venv
 
 ```powershell
 pip install --upgrade pip
-pip install transformers sentence-transformers torch streamlit langchain faiss-cpu pytz
+pip install transformers sentence-transformers torch streamlit langchain faiss-cpu pytz langchain-community
 ```
 
 ---
