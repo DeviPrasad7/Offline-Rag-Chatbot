@@ -43,13 +43,13 @@ python -m venv venv
 .\venv\Scripts\Activate
 ```
 
-3. **Install dependencies**:
+
+3. **Install dependencies from `requirements.txt`**:
 
 ```powershell
 pip install --upgrade pip
-pip install transformers sentence-transformers torch streamlit langchain faiss-cpu pytz langchain-community langchain-huggingface pypdf
+pip install -r requirements.txt
 ```
-
 ---
 
 ## Download Models
