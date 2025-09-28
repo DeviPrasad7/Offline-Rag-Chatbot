@@ -8,7 +8,7 @@ It runs entirely offline, allowing you to query documents without any internet c
 ## Features
 
 * Conversational chatbot interface using **Streamlit**.
-* Upload PDF documents for local question answering.
+* Upload PDF,docx,txt documents for local question answering.
 * Uses **FLAN-T5** for text generation and **all-MiniLM-L6-v2** for embeddings.
 * Fully offline — no calls to OpenAI or external APIs.
 * Formats lab values automatically (e.g., `ng/mL 0.81 - 3.85 0.68`).
@@ -76,12 +76,24 @@ streamlit run start.py
 ```
 * Will run offline , you can turn of your wifi.
 * The web interface will open at `http://localhost:8501`.
-* Upload PDFs or type questions directly in the chat input.
-
----
-
+* Upload PDFs,Docx,Txt files and type questions directly in the chat input.
 * Large `.safetensors` files are **ignored in Git** using `.gitignore`.
 
+---
+# Rag Chatbot Docker Image
+
+This Docker image provides a ready-to-use environment for running the Rag chatbot application:
+```pwershell
+deviprasad7/rag-chatbot:latest
+```
+Pull the image with:  
+```powershell
+docker pull deviprasad7/rag-chatbot:latest
+```
+Run the container with , it will provide you the URL to the offline RAG:
+```powershell
+docker run -it deviprasad7/rag-chatbot:latest
+```
 ---
 
 ## License
