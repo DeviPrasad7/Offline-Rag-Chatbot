@@ -45,6 +45,7 @@ body { background-color: #1e1e1e; color: #ffffff; }
 .timestamp { font-size: 12px; color: #888; margin: 2px 10px; }
 .bot-timestamp { text-align: left; margin-left: 10px; }
 .user-timestamp { text-align: right; margin-right: 10px; }
+.citation { font-size: 12px; color: #6fa8dc; margin: 2px 10px; font-style: italic; }
 .header { display: flex; align-items: center; gap: 15px; margin-bottom: 15px; padding: 10px; }
 .header img { width: 50px; height: 50px; }
 .header h1 { color: #00bfff; margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
@@ -73,7 +74,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-
 def clean_lab_text(text: str) -> str:
     pattern = re.compile(r"(ng/mL|mg/dL)\s+(\d+\.\d+)\s*-\s*(\d+\.\d+)\s*(\d+\.\d+)")
     def replacer(m):
@@ -84,12 +84,12 @@ def clean_lab_text(text: str) -> str:
         return f"Result: {result} {unit}, Reference Range: {ref_low} – {ref_high} {unit}"
     return pattern.sub(replacer, text)
 
-
 text_data = """
 ProRAG Chatbot provides local RAG capabilities.
 It can answer questions from uploaded PDFs, DOCX, and TXT files using offline Hugging Face models.
 """
 
+doc_map = {}
 
 with st.sidebar:
     st.header("📂 Upload Documents")
@@ -122,6 +122,7 @@ with st.sidebar:
                     for doc in docs:
                         if doc.page_content:
                             doc.page_content = clean_lab_text(doc.page_content)
+                            doc_map[doc.page_content] = file.name
                     documents.extend(docs)
                 except Exception as e:
                     st.error(f"Error processing {file.name}: {e}")
@@ -132,7 +133,6 @@ with st.sidebar:
     if st.button("Clear Chat", key="clear_chat"):
         st.session_state.chat_history = []
         st.success("Chat history cleared!")
-
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
@@ -151,8 +151,6 @@ vector_store = FAISS.from_texts(raw_texts, embeddings)
 
 tokenizer = AutoTokenizer.from_pretrained(LOCAL_LLM_MODEL, local_files_only=True)
 model = AutoModelForSeq2SeqLM.from_pretrained(LOCAL_LLM_MODEL, local_files_only=True)
-
-from langchain_huggingface import HuggingFacePipeline
 
 class TruncatingHuggingFacePipeline(HuggingFacePipeline):
     def _call(self, prompt: str, stop=None):
@@ -181,13 +179,14 @@ llm = TruncatingHuggingFacePipeline(pipeline=hf_pipeline)
 
 retriever = vector_store.as_retriever(search_kwargs={"k": 1})
 
-memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True, output_key="answer")
 
 qa_chain = ConversationalRetrievalChain.from_llm(
     llm=llm,
     retriever=retriever,
-    memory=memory,
-    return_source_documents=False,
+    memory=None,
+    return_source_documents=True,
+    output_key="answer",
     verbose=False
 )
 
@@ -215,14 +214,27 @@ if user_input:
     with st.spinner("ProRAG is typing..."):
         user_input_lower = user_input.lower().strip()
         bot_message = simple_responses.get(user_input_lower)
+        citation_text = ""
         if not bot_message:
-            response = qa_chain.invoke({"question": safe_question(user_input)})
+            response = qa_chain.invoke({
+                "question": safe_question(user_input),
+                "chat_history": memory.chat_memory.messages if memory else []
+            })
             bot_message = response["answer"]
-        st.session_state.chat_history.append(("bot", bot_message, current_time))
+            if response.get("source_documents") and len(response["source_documents"]) > 0:
+                source_doc = response["source_documents"][0]
+                doc_name = doc_map.get(source_doc.page_content, "Uploaded Document")
+                citation_text = f"Source: {doc_name}"
+        st.session_state.chat_history.append(("bot", bot_message, current_time, citation_text))
     st.session_state["bot_processing"] = False
 
 with st.container():
-    for role, msg, timestamp in st.session_state.chat_history:
+    for chat in st.session_state.chat_history:
+        if len(chat) == 3:
+            role, msg, timestamp = chat
+            citation = ""
+        else:
+            role, msg, timestamp, citation = chat
         if role == "user":
             st.markdown(f"""
                 <div class='chat-row' style='align-items: flex-end;'>
@@ -235,6 +247,7 @@ with st.container():
                 <div class='chat-row' style='align-items: flex-start;'>
                     <div class='chat-bubble bot-bubble'>{msg}</div>
                     <div class='timestamp bot-timestamp'>{timestamp}</div>
+                    {f"<div class='citation'>{citation}</div>" if citation else ""}
                 </div>
             """, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
