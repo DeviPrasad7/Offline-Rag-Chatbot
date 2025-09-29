@@ -5,11 +5,12 @@ from datetime import datetime
 import pytz
 import streamlit as st
 
-from langchain.text_splitter import CharacterTextSplitter
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings, HuggingFacePipeline
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
+from langchain.prompts import PromptTemplate
 
 from langchain_community.document_loaders import (
     PyPDFLoader,
@@ -32,8 +33,8 @@ st.set_page_config(page_title="ProRAG Chatbot", layout="wide", initial_sidebar_s
 st.markdown("""
 <style>
 [data-testid="stDecoration"] { display: none; }
-header, footer, #MainMenu { visibility: hidden; height: 0; }
-div.block-container { padding-top: 0.5rem; }
+footer { visibility: hidden; height: 0; }
+div.block-container { padding-top: 1.5rem; }
 body { background-color: #1e1e1e; color: #ffffff; }
 .chat-row { display: flex; flex-direction: column; margin-bottom: 15px; animation: fadeIn 0.3s ease-in; }
 .chat-bubble {
@@ -89,8 +90,6 @@ ProRAG Chatbot provides local RAG capabilities.
 It can answer questions from uploaded PDFs, DOCX, and TXT files using offline Hugging Face models.
 """
 
-doc_map = {}
-
 with st.sidebar:
     st.header("📂 Upload Documents")
     uploaded_files = st.file_uploader(
@@ -119,10 +118,10 @@ with st.sidebar:
                         st.warning(f"Unsupported file type: {file.name}")
                         continue
                     docs = loader.load()
-                    for doc in docs:
-                        if doc.page_content:
-                            doc.page_content = clean_lab_text(doc.page_content)
-                            doc_map[doc.page_content] = file.name
+                    for d in docs:
+                        if d.page_content:
+                            d.page_content = clean_lab_text(d.page_content)
+                            d.metadata = {**getattr(d, "metadata", {}), "source": file.name}
                     documents.extend(docs)
                 except Exception as e:
                     st.error(f"Error processing {file.name}: {e}")
@@ -137,17 +136,16 @@ with st.sidebar:
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-text_splitter = CharacterTextSplitter(chunk_size=100, chunk_overlap=20)
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
 
 if documents and hasattr(documents[0], "page_content"):
     chunks = text_splitter.split_documents(documents)
-    raw_texts = [c.page_content for c in chunks]
 else:
-    raw_texts = text_splitter.split_text(str(documents))
+    chunks = text_splitter.create_documents([str(documents)], metadatas=[{"source": "default.txt"}])
 
 embeddings = HuggingFaceEmbeddings(model_name=LOCAL_EMBEDDING_MODEL)
 
-vector_store = FAISS.from_texts(raw_texts, embeddings)
+vector_store = FAISS.from_documents(chunks, embeddings)
 
 tokenizer = AutoTokenizer.from_pretrained(LOCAL_LLM_MODEL, local_files_only=True)
 model = AutoModelForSeq2SeqLM.from_pretrained(LOCAL_LLM_MODEL, local_files_only=True)
@@ -157,12 +155,17 @@ class TruncatingHuggingFacePipeline(HuggingFacePipeline):
         inputs = self.pipeline.tokenizer(
             prompt,
             truncation=True,
-            max_length=256,
+            max_length=512,
             return_tensors="pt",
         )
         with torch.no_grad():
             outputs = self.pipeline.model.generate(
-                **inputs, max_length=256
+                **inputs,
+                max_new_tokens=256,
+                num_beams=4,
+                do_sample=False,
+                early_stopping=True,
+                no_repeat_ngram_size=3,
             )
         decoded = self.pipeline.tokenizer.batch_decode(
             outputs, skip_special_tokens=True
@@ -177,9 +180,23 @@ hf_pipeline = pipeline(
 
 llm = TruncatingHuggingFacePipeline(pipeline=hf_pipeline)
 
-retriever = vector_store.as_retriever(search_kwargs={"k": 1})
+retriever = vector_store.as_retriever(
+    search_type="mmr",
+    search_kwargs={"k": 4, "fetch_k": 20, "lambda_mult": 0.5}
+)
 
-memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True, output_key="answer")
+memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+
+qa_prompt = PromptTemplate(
+    input_variables=["context", "question"],
+    template=(
+        "Use the provided context to answer concisely.\n"
+        "If the context does not contain the answer, reply with \"I don't know\".\n\n"
+        "Context:\n{context}\n\n"
+        "Question:\n{question}\n\n"
+        "Answer:"
+    ),
+)
 
 qa_chain = ConversationalRetrievalChain.from_llm(
     llm=llm,
@@ -187,6 +204,7 @@ qa_chain = ConversationalRetrievalChain.from_llm(
     memory=None,
     return_source_documents=True,
     output_key="answer",
+    combine_docs_chain_kwargs={"prompt": qa_prompt},
     verbose=False
 )
 
@@ -210,7 +228,6 @@ if user_input:
     ist = pytz.timezone("Asia/Kolkata")
     current_time = datetime.now(ist).strftime("%H:%M:%S")
     st.session_state.chat_history.append(("user", user_input, current_time))
-
     with st.spinner("ProRAG is typing..."):
         user_input_lower = user_input.lower().strip()
         bot_message = simple_responses.get(user_input_lower)
@@ -218,13 +235,16 @@ if user_input:
         if not bot_message:
             response = qa_chain.invoke({
                 "question": safe_question(user_input),
-                "chat_history": memory.chat_memory.messages if memory else []
+                "chat_history": []
             })
-            bot_message = response["answer"]
-            if response.get("source_documents") and len(response["source_documents"]) > 0:
-                source_doc = response["source_documents"][0]
-                doc_name = doc_map.get(source_doc.page_content, "Uploaded Document")
+            bot_message = (response.get("answer") or "").strip()
+            sources = response.get("source_documents") or []
+            if sources:
+                top = sources[0]
+                doc_name = top.metadata.get("source", "Uploaded Document")
                 citation_text = f"Source: {doc_name}"
+            if not bot_message:
+                bot_message = "I don't know."
         st.session_state.chat_history.append(("bot", bot_message, current_time, citation_text))
     st.session_state["bot_processing"] = False
 
