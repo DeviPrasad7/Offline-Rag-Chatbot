@@ -8,7 +8,7 @@ It runs entirely offline, allowing you to query documents without any internet c
 ## Features
 
 * Conversational chatbot interface using **Streamlit**.
-* Upload PDF,docx,txt documents for local question answering.
+* Upload PDF, docx, txt file for local question answering along with citations.
 * Uses **FLAN-T5** for text generation and **all-MiniLM-L6-v2** for embeddings.
 * Fully offline — no calls to OpenAI or external APIs.
 * Formats lab values automatically (e.g., `ng/mL 0.81 - 3.85 0.68`).
