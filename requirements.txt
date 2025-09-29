@@ -1,0 +1,12 @@
+transformers>=4.35.0,<5.0
+sentence-transformers>=2.2.0,<3.0
+torch>=2.8.0,<3.0
+streamlit>=1.18.1,<2.0
+langchain>=0.3.20,<0.4
+langchain-community>=0.3.30,<0.4
+langchain-huggingface>=0.3.1,<0.4
+faiss-cpu>=1.12.0,<2.0
+pytz>=2025.2,<2026.0
+pypdf>=6.1.1,<7.0
+unstructured>=0.18.15,<0.19
+python-docx>=1.2.0,<2.0
